@@ -1,6 +1,6 @@
 {
   "name": "pclaw",
-  "version": "0.1.5",
+  "version": "0.1.6",
   "description": "PClaw - Windows-first AI image editing desktop app",
   "main": "out/main/index.js",
   "author": "DepartureZSH",
@@ -8,10 +8,10 @@
   "scripts": {
     "dev": "electron-vite dev",
     "build": "tsc --noEmit && electron-vite build",
-    "package": "npm run build && electron-builder",
-    "package:win": "npm run build && electron-builder --win nsis portable",
-    "package:mac": "npm run build && electron-builder --mac --universal",
-    "package:mac:adhoc": "npm run build && electron-builder --mac --universal -c.mac.identity=- -c.mac.hardenedRuntime=false -c.mac.notarize=false",
+    "package": "npm run build && electron-builder --publish never",
+    "package:win": "npm run build && electron-builder --win nsis portable --publish never",
+    "package:mac": "npm run build && electron-builder --mac --universal --publish never",
+    "package:mac:adhoc": "npm run build && CSC_IDENTITY_AUTO_DISCOVERY=false electron-builder --mac --universal -c.mac.hardenedRuntime=false -c.mac.notarize=false --publish never",
     "typecheck": "tsc --noEmit",
     "lint": "npm run typecheck"
   },
