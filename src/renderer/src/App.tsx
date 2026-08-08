@@ -24,7 +24,7 @@ import {
   WandSparkles,
   X
 } from 'lucide-react'
-import type { ApiSettings, BalanceInfo, EditProtocol, LogEntry, ModelInfo, UsedEditProtocol } from '../../shared/types'
+import type { ApiSettings, EditProtocol, LogEntry, ModelInfo, UsageInfo, UsedEditProtocol } from '../../shared/types'
 
 type Adjustments = {
   brightness: number
@@ -36,6 +36,7 @@ type Adjustments = {
 }
 
 type CropRect = { x: number; y: number; width: number; height: number }
+type ImageDimensions = { width: number; height: number }
 type Tool = 'adjust' | 'crop' | 'transform'
 
 const DEFAULT_ADJUSTMENTS: Adjustments = {
@@ -48,15 +49,11 @@ const DEFAULT_ADJUSTMENTS: Adjustments = {
 }
 
 const PRESETS = [
-  { name: '商业精修', prompt: '保持主体身份和构图不变，进行高端商业摄影精修：自然肤质，干净光影，克制锐化，真实细节，移除画面瑕疵。' },
-  { name: '智能去物', prompt: '移除画面中不需要的物体，并根据周围纹理、光照和透视自然补全背景，不改变其他内容。' },
-  { name: '证件照优化', prompt: '保持人物五官与身份完全一致，整理发丝和衣物，修正白平衡，使用均匀自然的证件照光线与纯净背景。' },
-  { name: '电商白底', prompt: '完整保留商品结构、材质和品牌细节，移除原背景，生成纯白背景与自然柔和的接触阴影。' },
-  { name: '清晰修复', prompt: '修复低清晰度、压缩伪影和轻微模糊，恢复可信的纹理细节与边缘，不改变原有内容。' },
-  { name: '风格迁移', prompt: '保留原图主体、姿态和构图，将画面转换为精致的编辑插画风格，色彩统一，细节丰富。' },
   { name: '海马体·天蓝', prompt: '生成一张浅天蓝色高清海马体精修最美证件照，影棚柔光均匀布光，面部过渡柔和，没有生硬黑影。' },
   { name: '海马体·白底', prompt: '自然精致微调，保留原生五官，肤质细腻，轻美颜，不失真，高清证件照，纯白色纯色背景，海马体精致证件照风格，年轻东亚人物，面部清晰自然，五官端正，表情温和，影棚柔光，均匀布光，细腻皮肤纹理，淡妆精致，无多余装饰，无AI畸形，无模糊，8K高清，RAW画质，细节饱满，正式得体，不修改面部表情和五官。' }
 ]
+
+const OUTPUT_RATIOS = ['9:16', '2:3', '3:4', '1:1', '4:3', '3:2', '16:9'] as const
 
 const FALLBACK_MODELS = [
   'gpt-image-1',
@@ -134,17 +131,57 @@ async function bakeImage(dataUrl: string, adjustments: Adjustments, crop?: CropR
   return cropped.toDataURL('image/png')
 }
 
-function formatQuota(value?: number): string {
+async function resizeImage(dataUrl: string, targetWidth: number): Promise<string> {
+  const image = await loadImage(dataUrl)
+  if (image.naturalWidth === targetWidth) return dataUrl
+  const canvas = document.createElement('canvas')
+  canvas.width = targetWidth
+  canvas.height = Math.max(1, Math.round(targetWidth * image.naturalHeight / image.naturalWidth))
+  const context = canvas.getContext('2d')!
+  context.imageSmoothingEnabled = true
+  context.imageSmoothingQuality = 'high'
+  context.drawImage(image, 0, 0, canvas.width, canvas.height)
+  return canvas.toDataURL('image/png')
+}
+
+function formatUsage(value?: number): string {
   if (value === undefined || !Number.isFinite(value)) return '—'
-  if (value >= 500_000) return `$${(value / 500_000).toFixed(2)}`
-  return Intl.NumberFormat('zh-CN', { notation: 'compact', maximumFractionDigits: 1 }).format(value)
+  return Intl.NumberFormat('zh-CN', { notation: 'compact', maximumFractionDigits: 2 }).format(value)
+}
+
+function formatDimensions(value?: ImageDimensions | null): string {
+  return value ? `${value.width} × ${value.height}` : '—'
+}
+
+function ratioToSize(ratio: string, width = 1024): string {
+  const [ratioWidth, ratioHeight] = ratio.split(':').map(Number)
+  const height = Math.max(8, Math.round((width * ratioHeight / ratioWidth) / 8) * 8)
+  return `${width}x${height}`
+}
+
+function closestRatio(width: number, height: number): string {
+  const value = width / height
+  const known = OUTPUT_RATIOS.map((label) => {
+    const [ratioWidth, ratioHeight] = label.split(':').map(Number)
+    return { label, value: ratioWidth / ratioHeight }
+  }).sort((a, b) => Math.abs(a.value - value) - Math.abs(b.value - value))[0]
+  return Math.abs(known.value - value) < 0.025 ? known.label : `${value.toFixed(2)}:1`
+}
+
+function imageFrameStyle(value?: ImageDimensions | null): React.CSSProperties {
+  const width = Math.max(1, value?.width || 1)
+  const height = Math.max(1, value?.height || 1)
+  return {
+    '--image-ratio': width / height,
+    aspectRatio: `${width} / ${height}`
+  } as React.CSSProperties
 }
 
 function App() {
   const [original, setOriginal] = useState<string | null>(null)
   const [result, setResult] = useState<string | null>(null)
   const [fileName, setFileName] = useState('image.png')
-  const [dimensions, setDimensions] = useState({ original: '—', result: '—' })
+  const [dimensions, setDimensions] = useState<{ original: ImageDimensions | null; result: ImageDimensions | null }>({ original: null, result: null })
   const [tool, setTool] = useState<Tool>('adjust')
   const [adjustments, setAdjustments] = useState(DEFAULT_ADJUSTMENTS)
   const [history, setHistory] = useState<Adjustments[]>([])
@@ -155,7 +192,8 @@ function App() {
   const [protocol, setProtocol] = useState<EditProtocol>('auto')
   const [prompt, setPrompt] = useState(PRESETS[0].prompt)
   const [selectedPreset, setSelectedPreset] = useState(PRESETS[0].name)
-  const [size, setSize] = useState('auto')
+  const [outputRatio, setOutputRatio] = useState<(typeof OUTPUT_RATIOS)[number]>('2:3')
+  const [exportWidth, setExportWidth] = useState(1024)
   const [generating, setGenerating] = useState(false)
   const [notice, setNotice] = useState<string | null>(null)
   const [settingsOpen, setSettingsOpen] = useState(false)
@@ -163,7 +201,7 @@ function App() {
   const [logs, setLogs] = useState<LogEntry[]>([])
   const [apiSettings, setApiSettings] = useState<ApiSettings>({ baseUrl: 'https://chatbot.cn.unreachablecity.club', hasApiKey: false })
   const [apiKey, setApiKey] = useState('')
-  const [balance, setBalance] = useState<BalanceInfo>({ available: false, message: '未连接' })
+  const [usage, setUsage] = useState<UsageInfo>({ available: false, message: '未连接' })
   const cropStageRef = useRef<HTMLDivElement>(null)
   const dragging = useRef<{ startX: number; startY: number; startCrop: CropRect } | null>(null)
 
@@ -171,15 +209,28 @@ function App() {
   const cssTransform = `rotate(${adjustments.rotation}deg) scale(${adjustments.flipX ? -1 : 1}, ${adjustments.flipY ? -1 : 1})`
   const cssFilter = `brightness(${adjustments.brightness}%) contrast(${adjustments.contrast}%) saturate(${adjustments.saturation}%)`
   const resolvedProtocol = protocol === 'auto' ? inferProtocol(model) : protocol
+  const activeDimensions = result ? dimensions.result : dimensions.original
+  const rotationSwapsSides = Math.abs(adjustments.rotation / 90) % 2 === 1
+  const previewDimensions = activeDimensions && rotationSwapsSides
+    ? { width: activeDimensions.height, height: activeDimensions.width }
+    : activeDimensions
+  const exportHeight = previewDimensions
+    ? Math.max(1, Math.round(exportWidth * previewDimensions.height / previewDimensions.width))
+    : null
+  const cropPixelWidth = previewDimensions ? Math.max(1, Math.round(previewDimensions.width * crop.width)) : 0
+  const cropPixelHeight = previewDimensions ? Math.max(1, Math.round(previewDimensions.height * crop.height)) : 0
+  const cropStatus = cropPixelWidth && cropPixelHeight
+    ? `${cropPixelWidth} × ${cropPixelHeight} · ${closestRatio(cropPixelWidth, cropPixelHeight)}`
+    : '等待图片'
 
   const loadConnection = useCallback(async () => {
     if (!window.pclaw) return
     const current = await window.pclaw.getSettings()
     setApiSettings(current)
     if (!current.hasApiKey) return
-    const [modelResult, balanceResult] = await Promise.allSettled([
+    const [modelResult, usageResult] = await Promise.allSettled([
       window.pclaw.fetchModels(),
-      window.pclaw.fetchBalance()
+      window.pclaw.fetchUsage()
     ])
     if (modelResult.status === 'fulfilled') {
       const imageModels = modelResult.value.filter((item) => /image|banana|flux|dall|seedream|ideogram/i.test(item.id))
@@ -187,8 +238,17 @@ function App() {
       setModels(list)
       if (list[0]) setModel(list[0].id)
     }
-    if (balanceResult.status === 'fulfilled') setBalance(balanceResult.value)
+    if (usageResult.status === 'fulfilled') setUsage(usageResult.value)
   }, [])
+
+  const refreshUsage = useCallback(async () => {
+    if (!window.pclaw || !apiSettings.hasApiKey) return
+    try {
+      setUsage(await window.pclaw.fetchUsage())
+    } catch (error) {
+      setNotice(error instanceof Error ? error.message : '使用量刷新失败')
+    }
+  }, [apiSettings.hasApiKey])
 
   useEffect(() => {
     void loadConnection()
@@ -202,7 +262,7 @@ function App() {
 
   const inspectDimensions = useCallback(async (dataUrl: string, target: 'original' | 'result') => {
     const image = await loadImage(dataUrl)
-    setDimensions((current) => ({ ...current, [target]: `${image.naturalWidth} × ${image.naturalHeight}` }))
+    setDimensions((current) => ({ ...current, [target]: { width: image.naturalWidth, height: image.naturalHeight } }))
   }, [])
 
   const openImage = useCallback(async () => {
@@ -215,7 +275,7 @@ function App() {
     setHistory([])
     setFuture([])
     void inspectDimensions(selected.dataUrl, 'original')
-    setDimensions((current) => ({ ...current, result: '—' }))
+    setDimensions((current) => ({ ...current, result: null }))
   }, [inspectDimensions])
 
   const changeAdjustment = (key: keyof Adjustments, value: number | boolean) => {
@@ -257,7 +317,8 @@ function App() {
   const saveImage = async () => {
     if (!displaySource) return
     const baked = await bakeImage(displaySource, adjustments)
-    const path = await window.pclaw.saveImage(baked, `PClaw-${fileName}`)
+    const resized = await resizeImage(baked, exportWidth)
+    const path = await window.pclaw.saveImage(resized, `PClaw-${fileName}`)
     if (path) setNotice(`已保存到 ${path}`)
   }
 
@@ -271,13 +332,20 @@ function App() {
     setGenerating(true)
     try {
       const prepared = await bakeImage(original, adjustments)
-      const response = await window.pclaw.editImage({ imageDataUrl: prepared, fileName, prompt: prompt.trim(), model, size, protocol })
+      const response = await window.pclaw.editImage({
+        imageDataUrl: prepared,
+        fileName,
+        prompt: prompt.trim(),
+        model,
+        size: ratioToSize(outputRatio),
+        protocol
+      })
       setResult(response.imageDataUrl)
       setAdjustments(DEFAULT_ADJUSTMENTS)
       await inspectDimensions(response.imageDataUrl, 'result')
       setNotice(`AI 编辑完成 · ${protocolName(response.protocol)}`)
-      const freshBalance = await window.pclaw.fetchBalance()
-      setBalance(freshBalance)
+      const freshUsage = await window.pclaw.fetchUsage()
+      setUsage(freshUsage)
     } catch (error) {
       setNotice(error instanceof Error ? error.message : '生成失败，请检查配置')
     } finally {
@@ -377,9 +445,15 @@ function App() {
           <ChevronDown size={14} />
         </div>
         <div className="top-actions">
-          <button className="balance" onClick={() => setSettingsOpen(true)}>
-            <span>可用余额</span>
-            <strong>{balance.available ? formatQuota(balance.amount) : '—'}</strong>
+          <button
+            className="usage-meter"
+            onClick={() => void refreshUsage()}
+            title={usage.available
+              ? `已用 ${usage.used ?? 0} / 总额度 ${usage.granted ?? '—'} / 剩余 ${usage.remaining ?? '—'}`
+              : usage.message}
+          >
+            <span>使用量</span>
+            <strong>{usage.unlimited ? formatUsage(usage.used) : usage.available ? formatUsage(usage.used) : '—'}</strong>
           </button>
           <button className="icon-button" aria-label="运行日志" onClick={() => void openLogs()}><ScrollText size={18} /></button>
           <button className="icon-button" aria-label="连接设置" onClick={() => setSettingsOpen(true)}><Settings size={18} /></button>
@@ -400,7 +474,7 @@ function App() {
         <section className="workspace">
           <div className="workspace-toolbar">
             <div className="view-label"><span>双图对照</span><i>原图与结果独立缩放</i></div>
-            <div className="zoom-control">画布适配 <span>100%</span></div>
+            <div className="zoom-control">等比例适配 <span>FIT</span></div>
           </div>
 
           {!original ? (
@@ -418,33 +492,37 @@ function App() {
           ) : (
             <div className="comparison-stage">
               <figure className="image-pane original-pane">
-                <figcaption><span>原图</span><small>{dimensions.original}</small></figcaption>
+                <figcaption><span>原图</span><small>{formatDimensions(dimensions.original)}</small></figcaption>
                 <div className="checkerboard">
-                  <img src={original} alt="原图" />
+                  <div className="image-frame" style={imageFrameStyle(dimensions.original)}>
+                    <img src={original} alt="原图" />
+                  </div>
                 </div>
               </figure>
               <figure className="image-pane result-pane">
                 <figcaption>
                   <span>{result ? 'AI 结果' : '编辑预览'}</span>
-                  <small>{result ? dimensions.result : dimensions.original}</small>
+                  <small>{formatDimensions(result ? dimensions.result : dimensions.original)}</small>
                 </figcaption>
-                <div className={`checkerboard result-canvas ${generating ? 'is-generating' : ''}`} ref={cropStageRef}>
-                  <img src={displaySource || ''} alt="编辑结果" style={{ filter: cssFilter, transform: cssTransform }} />
-                  {tool === 'crop' && !generating && (
-                    <div className="crop-mask">
-                      <div
-                        className="crop-rect"
-                        style={{ left: `${crop.x * 100}%`, top: `${crop.y * 100}%`, width: `${crop.width * 100}%`, height: `${crop.height * 100}%` }}
-                        onPointerDown={cropPointerDown}
-                        onPointerMove={cropPointerMove}
-                        onPointerUp={() => { dragging.current = null }}
-                      >
-                        <i /><i /><i /><i />
+                <div className={`checkerboard result-canvas ${generating ? 'is-generating' : ''}`}>
+                  <div className="image-frame" style={imageFrameStyle(previewDimensions)} ref={cropStageRef}>
+                    <img src={displaySource || ''} alt="编辑结果" style={{ filter: cssFilter, transform: cssTransform }} />
+                    {tool === 'crop' && !generating && (
+                      <div className="crop-mask">
+                        <div
+                          className="crop-rect"
+                          style={{ left: `${crop.x * 100}%`, top: `${crop.y * 100}%`, width: `${crop.width * 100}%`, height: `${crop.height * 100}%` }}
+                          onPointerDown={cropPointerDown}
+                          onPointerMove={cropPointerMove}
+                          onPointerUp={() => { dragging.current = null }}
+                        >
+                          <i /><i /><i /><i />
+                        </div>
+                        <button className="apply-crop" onClick={applyCrop}><Check size={15} /> 应用裁剪</button>
                       </div>
-                      <button className="apply-crop" onClick={applyCrop}><Check size={15} /> 应用裁剪</button>
-                    </div>
-                  )}
-                  {generating && <div className="generating-overlay"><LoaderCircle /><strong>AI 正在重绘画面</strong><span>请保持 PClaw 开启</span></div>}
+                    )}
+                    {generating && <div className="generating-overlay"><LoaderCircle /><strong>AI 正在重绘画面</strong><span>请保持 PClaw 开启</span></div>}
+                  </div>
                 </div>
               </figure>
             </div>
@@ -466,7 +544,7 @@ function App() {
               {tool === 'crop' && <>
                 <RangeControl label="裁剪宽" value={Math.round(crop.width * 100)} min={20} max={100} onChange={(value) => resizeCrop('width', value)} />
                 <RangeControl label="裁剪高" value={Math.round(crop.height * 100)} min={20} max={100} onChange={(value) => resizeCrop('height', value)} />
-                <div className="crop-hint">拖动裁剪框定位</div>
+                <div className="crop-hint"><span>实时尺寸比例</span><strong>{cropStatus}</strong></div>
               </>}
             </div>
           )}
@@ -508,13 +586,16 @@ function App() {
           </div>
 
           <div className="size-row">
-            <label className="field-label" htmlFor="size">输出尺寸</label>
-            <select id="size" value={size} onChange={(event) => setSize(event.target.value)}>
-              <option value="auto">自动</option>
-              <option value="1024x1024">1:1 · 1024²</option>
-              <option value="1536x1024">3:2 · 横向</option>
-              <option value="1024x1536">2:3 · 竖向</option>
+            <label className="field-label" htmlFor="output-ratio">输出比例</label>
+            <select id="output-ratio" value={outputRatio} onChange={(event) => setOutputRatio(event.target.value as (typeof OUTPUT_RATIOS)[number])}>
+              {OUTPUT_RATIOS.map((item) => <option value={item} key={item}>{item}</option>)}
             </select>
+          </div>
+
+          <div className="export-resolution">
+            <div className="preset-heading"><label className="field-label">导出基础像素</label><span>保持图片比例</span></div>
+            <RangeControl label="宽度" value={exportWidth} min={512} max={4096} step={64} suffix="px" onChange={setExportWidth} />
+            <small>导出尺寸：{exportHeight ? `${exportWidth} × ${exportHeight}` : `${exportWidth} × —`}</small>
           </div>
 
           <div className="panel-spacer" />
@@ -573,8 +654,63 @@ function App() {
   )
 }
 
-function RangeControl({ label, value, min, max, onChange }: { label: string; value: number; min: number; max: number; onChange: (value: number) => void }) {
-  return <label className="range-control"><span>{label}</span><input type="range" min={min} max={max} value={value} onChange={(event) => onChange(Number(event.target.value))} /><output>{value}</output></label>
+function RangeControl({
+  label,
+  value,
+  min,
+  max,
+  step = 1,
+  suffix = '',
+  onChange
+}: {
+  label: string
+  value: number
+  min: number
+  max: number
+  step?: number
+  suffix?: string
+  onChange: (value: number) => void
+}) {
+  const [draft, setDraft] = useState(String(value))
+
+  useEffect(() => {
+    setDraft(String(value))
+  }, [value])
+
+  const commitDraft = () => {
+    const parsed = Number(draft)
+    const next = Number.isFinite(parsed) ? Math.min(max, Math.max(min, parsed)) : value
+    setDraft(String(next))
+    if (next !== value) onChange(next)
+  }
+
+  return (
+    <label className="range-control">
+      <span>{label}</span>
+      <input
+        type="range"
+        min={min}
+        max={max}
+        step={step}
+        value={value}
+        onChange={(event) => onChange(Number(event.target.value))}
+      />
+      <span className="number-entry">
+        <input
+          aria-label={`${label}数值`}
+          type="number"
+          min={min}
+          max={max}
+          step={step}
+          value={draft}
+          onChange={(event) => setDraft(event.target.value)}
+          onBlur={commitDraft}
+          onKeyDown={(event) => { if (event.key === 'Enter') event.currentTarget.blur() }}
+        />
+        {suffix && <i>{suffix}</i>}
+      </span>
+    </label>
+  )
 }
 
 export default App

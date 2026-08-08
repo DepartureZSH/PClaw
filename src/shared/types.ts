@@ -32,11 +32,13 @@ export type EditResponse = {
   protocol: UsedEditProtocol
 }
 
-export type BalanceInfo = {
+export type UsageInfo = {
   available: boolean
-  amount?: number
   used?: number
-  unit?: string
+  granted?: number
+  remaining?: number
+  unlimited?: boolean
+  unit?: 'quota'
   message?: string
 }
 

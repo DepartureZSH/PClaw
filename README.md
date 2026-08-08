@@ -6,11 +6,13 @@ PClaw 是一个 Windows 优先、跨平台的 AI 图片编辑桌面应用。它�
 
 - 原图与 AI 结果同屏对照，显示各自像素尺寸
 - 本地导入 PNG / JPG / JPEG / WebP，结果可另存为 PNG
-- 亮度、对比度、饱和度、旋转、翻转、裁剪、撤销与重做
+- 亮度、对比度、饱和度、旋转、翻转、裁剪、撤销与重做；滑杆数值均可直接输入
 - 从 New API 动态获取可用模型，并提供图像模型优先筛选
 - 自动识别并支持 OpenAI multipart、Seedream JSON generations、Qwen DashScope JSON 与多模态 Chat JSON
 - 可手动指定接口协议，避免模型名称映射特殊时调用错误端点
-- 提示词预设、自定义提示词与常见输出尺寸
+- 两个海马体证件照提示词预设、自定义提示词，以及 9:16 至 16:9 的七种输出比例
+- 图片在工作台中始终等比例适配；导出宽度默认 1024 px，可用滑杆或数字输入调整并保持图片比例
+- 使用 New API 令牌接口显示已用量、总额度与剩余量
 - 本地运行日志记录端点、模型、状态码与请求 ID，支持刷新、清空和导出
 - API Key 在 Electron 主进程中通过操作系统安全存储加密
 - GitHub Actions 构建 Windows 安装包与便携版，同时构建 macOS / Linux 产物
@@ -57,7 +59,7 @@ PClaw 通过 New API 按模型使用不同接口：
 - Seedream / SeedEdit：`POST /v1/images/generations`，JSON `image` 数组
 - Qwen Image：`POST /v1/images/edits`，由 New API 将 DashScope JSON 转发给阿里云
 - Gemini / Nano Banana：`POST /v1/chat/completions`，多模态 JSON
-- `GET /api/usage/token`（可选；部分部署不会开放令牌余额查询）
+- `GET /api/usage/token/`（可选；显示当前 API 令牌的使用量、总额度与剩余额度）
 
 “自动识别”会根据模型名选择协议；如果 New API 使用了自定义模型映射，可在界面中手动指定协议。图像编辑模型是否可用、支持的尺寸以及计费方式由 New API 实例中的渠道配置决定。
 

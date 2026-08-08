@@ -4,10 +4,10 @@ import { readFile, writeFile } from 'node:fs/promises'
 import Store from 'electron-store'
 import type {
   ApiSettings,
-  BalanceInfo,
   EditRequest,
   EditResponse,
   ModelInfo,
+  UsageInfo,
   UsedEditProtocol
 } from '../shared/types'
 import { clearLogs, formatLogs, listLogs, writeLog } from './logger'
@@ -340,19 +340,34 @@ function registerIpc(): void {
     }
   })
 
-  ipcMain.handle('api:balance', async (): Promise<BalanceInfo> => {
+  ipcMain.handle('api:usage', async (): Promise<UsageInfo> => {
     try {
-      const response = await apiFetch('/api/usage/token')
+      const response = await apiFetch('/api/usage/token/')
       const body = (await response.json()) as Record<string, unknown>
       const data = (body.data || body) as Record<string, unknown>
-      const total = Number(data.total_granted ?? data.total_available ?? data.quota ?? NaN)
       const used = Number(data.total_used ?? data.used ?? NaN)
-      if (Number.isFinite(total)) return { available: true, amount: total, used: Number.isFinite(used) ? used : undefined, unit: 'quota' }
+      const granted = Number(data.total_granted ?? NaN)
+      const remaining = Number(data.total_available ?? data.remaining ?? NaN)
+      if (Number.isFinite(used)) {
+        const result: UsageInfo = {
+          available: true,
+          used,
+          granted: Number.isFinite(granted) ? granted : undefined,
+          remaining: Number.isFinite(remaining) ? remaining : undefined,
+          unlimited: data.unlimited_quota === true,
+          unit: 'quota'
+        }
+        writeLog('info', 'api.usage', '令牌使用量获取成功', {
+          used,
+          unlimited: result.unlimited || false
+        })
+        return result
+      }
     } catch (error) {
-      writeLog('warn', 'api.balance.unavailable', errorMessage(error), errorDetails(error))
-      // Not every New API deployment exposes token-level balance lookup.
+      writeLog('warn', 'api.usage.unavailable', errorMessage(error), errorDetails(error))
+      // Older New API deployments may not expose token usage lookup.
     }
-    return { available: false, message: '余额需登录控制台查看' }
+    return { available: false, message: '使用量需登录控制台查看' }
   })
 
   ipcMain.handle('api:edit-image', async (_event, request: EditRequest): Promise<EditResponse> => {
