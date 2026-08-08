@@ -39,6 +39,9 @@ npm run package
 
 # Windows（建议在 Windows 或 GitHub Actions 中执行）
 npm run package:win
+
+# macOS 通用版（Intel 与 Apple Silicon）
+npm run package:mac
 ```
 
 产物生成在 `release/` 目录。推送到 `main` 或手动运行 Actions 会构建三平台包；推送 `v*` 标签时，会等待三个平台全部构建成功，再汇总安装包并创建一次 GitHub Release。
@@ -48,7 +51,20 @@ git tag v0.1.0
 git push origin v0.1.0
 ```
 
-默认构建产物没有商业代码签名证书。Windows 首次运行时可能出现 SmartScreen 提示；正式分发前可在仓库 Secrets 中配置代码签名证书与密码。
+Windows 首次运行时可能出现 SmartScreen 提示。macOS 正式分发需要 Apple Developer Program 的 Developer ID 签名与公证；在仓库 Actions Secrets 中配置以下值后，发布流程会自动完成签名、公证和凭证装订：
+
+- `MAC_CSC_LINK`：Developer ID Application `.p12` 证书的 Base64 内容
+- `MAC_CSC_KEY_PASSWORD`：证书密码
+- `APPLE_ID`：Apple ID 邮箱
+- `APPLE_APP_SPECIFIC_PASSWORD`：Apple ID 专用密码
+- `APPLE_TEAM_ID`：开发者团队 ID
+
+如果这些凭据尚未配置，Actions 会生成通过完整性校验的临时签名通用版，但 Gatekeeper 不会信任临时签名。首次打开前，将应用复制到“应用程序”后执行：
+
+```bash
+xattr -cr /Applications/PClaw.app
+open /Applications/PClaw.app
+```
 
 ## New API 接口
 

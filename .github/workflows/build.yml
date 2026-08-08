@@ -23,7 +23,7 @@ jobs:
             command: npm run package:win
           - name: macOS
             os: macos-latest
-            command: npm run package -- --mac
+            command: npm run package:mac
           - name: Linux
             os: ubuntu-latest
             command: npm run package -- --linux
@@ -43,9 +43,33 @@ jobs:
         run: npm ci
 
       - name: Build package
+        if: matrix.name != 'macOS'
         run: ${{ matrix.command }}
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and verify macOS package
+        if: matrix.name == 'macOS'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          CSC_LINK: ${{ secrets.MAC_CSC_LINK }}
+          CSC_KEY_PASSWORD: ${{ secrets.MAC_CSC_KEY_PASSWORD }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: |
+          if [[ -n "$CSC_LINK" && -n "$CSC_KEY_PASSWORD" && -n "$APPLE_ID" && -n "$APPLE_APP_SPECIFIC_PASSWORD" && -n "$APPLE_TEAM_ID" ]]; then
+            echo "Building a Developer ID signed and notarized universal app"
+            npm run package:mac
+          else
+            echo "::warning::Apple signing secrets are incomplete; building a fully ad-hoc signed universal app"
+            npm run package:mac:adhoc
+          fi
+
+          app_path="$(find release -type d -name 'PClaw.app' -print -quit)"
+          test -n "$app_path"
+          codesign --verify --deep --strict --verbose=2 "$app_path"
 
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
