@@ -10,18 +10,21 @@ import {
   ImagePlus,
   LoaderCircle,
   Maximize2,
+  RefreshCw,
   Redo2,
   RotateCcw,
   RotateCw,
   Settings,
   SlidersHorizontal,
   Sparkles,
+  ScrollText,
+  Trash2,
   Undo2,
   Upload,
   WandSparkles,
   X
 } from 'lucide-react'
-import type { ApiSettings, BalanceInfo, ModelInfo } from '../../shared/types'
+import type { ApiSettings, BalanceInfo, LogEntry, ModelInfo } from '../../shared/types'
 
 type Adjustments = {
   brightness: number
@@ -50,7 +53,9 @@ const PRESETS = [
   { name: '证件照优化', prompt: '保持人物五官与身份完全一致，整理发丝和衣物，修正白平衡，使用均匀自然的证件照光线与纯净背景。' },
   { name: '电商白底', prompt: '完整保留商品结构、材质和品牌细节，移除原背景，生成纯白背景与自然柔和的接触阴影。' },
   { name: '清晰修复', prompt: '修复低清晰度、压缩伪影和轻微模糊，恢复可信的纹理细节与边缘，不改变原有内容。' },
-  { name: '风格迁移', prompt: '保留原图主体、姿态和构图，将画面转换为精致的编辑插画风格，色彩统一，细节丰富。' }
+  { name: '风格迁移', prompt: '保留原图主体、姿态和构图，将画面转换为精致的编辑插画风格，色彩统一，细节丰富。' },
+  { name: '海马体·天蓝', prompt: '生成一张浅天蓝色高清海马体精修最美证件照，影棚柔光均匀布光，面部过渡柔和，没有生硬黑影。' },
+  { name: '海马体·白底', prompt: '自然精致微调，保留原生五官，肤质细腻，轻美颜，不失真，高清证件照，纯白色纯色背景，海马体精致证件照风格，年轻东亚人物，面部清晰自然，五官端正，表情温和，影棚柔光，均匀布光，细腻皮肤纹理，淡妆精致，无多余装饰，无AI畸形，无模糊，8K高清，RAW画质，细节饱满，正式得体，不修改面部表情和五官。' }
 ]
 
 const FALLBACK_MODELS = ['gpt-image-1', 'gpt-image-1.5', 'gemini-2.5-flash-image', 'nano-banana-pro']
@@ -122,6 +127,8 @@ function App() {
   const [generating, setGenerating] = useState(false)
   const [notice, setNotice] = useState<string | null>(null)
   const [settingsOpen, setSettingsOpen] = useState(false)
+  const [logsOpen, setLogsOpen] = useState(false)
+  const [logs, setLogs] = useState<LogEntry[]>([])
   const [apiSettings, setApiSettings] = useState<ApiSettings>({ baseUrl: 'https://chatbot.cn.unreachablecity.club', hasApiKey: false })
   const [apiKey, setApiKey] = useState('')
   const [balance, setBalance] = useState<BalanceInfo>({ available: false, message: '未连接' })
@@ -258,6 +265,34 @@ function App() {
     }
   }
 
+  const refreshLogs = useCallback(async () => {
+    const entries = await window.pclaw.listLogs()
+    setLogs(entries)
+  }, [])
+
+  const openLogs = async () => {
+    if (!window.pclaw) {
+      setLogs([])
+      setLogsOpen(true)
+      return
+    }
+    await refreshLogs()
+    setLogsOpen(true)
+  }
+
+  const clearRunLogs = async () => {
+    setLogs(await window.pclaw.clearLogs())
+    setNotice('运行日志已清空')
+  }
+
+  const exportRunLogs = async () => {
+    const path = await window.pclaw.exportLogs()
+    if (path) {
+      setNotice(`日志已导出到 ${path}`)
+      await refreshLogs()
+    }
+  }
+
   const cropPointerDown = (event: React.PointerEvent<HTMLDivElement>) => {
     const rect = cropStageRef.current?.getBoundingClientRect()
     if (!rect) return
@@ -313,6 +348,7 @@ function App() {
             <span>可用余额</span>
             <strong>{balance.available ? formatQuota(balance.amount) : '—'}</strong>
           </button>
+          <button className="icon-button" aria-label="运行日志" onClick={() => void openLogs()}><ScrollText size={18} /></button>
           <button className="icon-button" aria-label="连接设置" onClick={() => setSettingsOpen(true)}><Settings size={18} /></button>
           <button className="export-button" disabled={!displaySource} onClick={saveImage}><Download size={16} /> 导出</button>
         </div>
@@ -459,6 +495,34 @@ function App() {
             <div className="connection-status"><span className={apiSettings.hasApiKey ? 'connected' : ''} />{apiSettings.hasApiKey ? '本机已保存密钥' : '尚未配置密钥'}</div>
             <div className="modal-actions"><button type="button" onClick={() => setSettingsOpen(false)}>取消</button><button className="primary" type="submit">保存并连接</button></div>
           </form>
+        </div>
+      )}
+
+      {logsOpen && (
+        <div className="modal-backdrop" onMouseDown={(event) => { if (event.target === event.currentTarget) setLogsOpen(false) }}>
+          <section className="logs-modal" role="dialog" aria-modal="true" aria-labelledby="logs-title">
+            <div className="modal-head">
+              <div><span>DIAGNOSTICS</span><h2 id="logs-title">运行日志</h2></div>
+              <button type="button" onClick={() => setLogsOpen(false)}><X /></button>
+            </div>
+            <div className="logs-toolbar">
+              <p>最近 {logs.length} 条，仅记录请求状态与错误上下文；API Key、提示词和图片内容会自动隐藏。</p>
+              <div>
+                <button onClick={() => void refreshLogs()}><RefreshCw size={14} />刷新</button>
+                <button onClick={() => void exportRunLogs()}><Download size={14} />导出</button>
+                <button className="danger" onClick={() => void clearRunLogs()}><Trash2 size={14} />清空</button>
+              </div>
+            </div>
+            <div className="log-list">
+              {logs.length === 0 ? <div className="empty-logs"><ScrollText /><strong>暂无运行日志</strong><span>模型请求与错误会显示在这里</span></div> : logs.map((entry) => (
+                <article className={`log-entry ${entry.level}`} key={entry.id}>
+                  <div className="log-meta"><span>{entry.level}</span><strong>{entry.event}</strong><time>{new Date(entry.timestamp).toLocaleString('zh-CN')}</time></div>
+                  <p>{entry.message}</p>
+                  {entry.details && <pre>{JSON.stringify(entry.details, null, 2)}</pre>}
+                </article>
+              ))}
+            </div>
+          </section>
         </div>
       )}
 

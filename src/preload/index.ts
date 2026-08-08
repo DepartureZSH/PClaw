@@ -1,5 +1,5 @@
 import { contextBridge, ipcRenderer } from 'electron'
-import type { ApiSettings, BalanceInfo, EditRequest, EditResponse, ModelInfo } from '../shared/types'
+import type { ApiSettings, BalanceInfo, EditRequest, EditResponse, LogEntry, ModelInfo } from '../shared/types'
 
 const desktopApi = {
   openImage: (): Promise<{ dataUrl: string; fileName: string } | null> => ipcRenderer.invoke('file:open-image'),
@@ -11,9 +11,21 @@ const desktopApi = {
   fetchModels: (): Promise<ModelInfo[]> => ipcRenderer.invoke('api:models'),
   fetchBalance: (): Promise<BalanceInfo> => ipcRenderer.invoke('api:balance'),
   editImage: (request: EditRequest): Promise<EditResponse> => ipcRenderer.invoke('api:edit-image', request),
+  listLogs: (): Promise<LogEntry[]> => ipcRenderer.invoke('logs:list'),
+  clearLogs: (): Promise<LogEntry[]> => ipcRenderer.invoke('logs:clear'),
+  exportLogs: (): Promise<string | null> => ipcRenderer.invoke('logs:export'),
   platform: process.platform
 }
 
 contextBridge.exposeInMainWorld('pclaw', desktopApi)
+
+window.addEventListener('error', (event) => {
+  ipcRenderer.send('logs:renderer-error', { message: event.message, source: event.filename })
+})
+
+window.addEventListener('unhandledrejection', (event) => {
+  const message = event.reason instanceof Error ? event.reason.message : String(event.reason)
+  ipcRenderer.send('logs:renderer-error', { message, source: 'unhandledrejection' })
+})
 
 export type DesktopApi = typeof desktopApi

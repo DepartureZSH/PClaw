@@ -19,6 +19,7 @@ export type EditRequest = {
 export type EditResponse = {
   imageDataUrl: string
   revisedPrompt?: string
+  protocol: 'images-edits' | 'chat-completions'
 }
 
 export type BalanceInfo = {
@@ -27,4 +28,15 @@ export type BalanceInfo = {
   used?: number
   unit?: string
   message?: string
+}
+
+export type LogLevel = 'info' | 'warn' | 'error'
+
+export type LogEntry = {
+  id: string
+  timestamp: string
+  level: LogLevel
+  event: string
+  message: string
+  details?: Record<string, string | number | boolean | null>
 }

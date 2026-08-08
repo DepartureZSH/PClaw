@@ -8,7 +8,9 @@ PClaw 是一个 Windows 优先、跨平台的 AI 图片编辑桌面应用。它�
 - 本地导入 PNG / JPG / JPEG / WebP，结果可另存为 PNG
 - 亮度、对比度、饱和度、旋转、翻转、裁剪、撤销与重做
 - 从 New API 动态获取可用模型，并提供图像模型优先筛选
+- 自动兼容 OpenAI Images multipart 与多模态 Chat JSON 两种图片编辑协议
 - 提示词预设、自定义提示词与常见输出尺寸
+- 本地运行日志记录端点、模型、状态码与请求 ID，支持刷新、清空和导出
 - API Key 在 Electron 主进程中通过操作系统安全存储加密
 - GitHub Actions 构建 Windows 安装包与便携版，同时构建 macOS / Linux 产物
 
