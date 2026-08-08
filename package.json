@@ -45,14 +45,17 @@
       "target": [
         "nsis",
         "portable"
-      ],
-      "artifactName": "PClaw-${version}-${arch}.${ext}"
+      ]
     },
     "nsis": {
+      "artifactName": "PClaw-Setup-${version}-${arch}.${ext}",
       "oneClick": false,
       "allowToChangeInstallationDirectory": true,
       "createDesktopShortcut": true,
       "createStartMenuShortcut": true
+    },
+    "portable": {
+      "artifactName": "PClaw-Portable-${version}-${arch}.${ext}"
     },
     "mac": {
       "target": "dmg"

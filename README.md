@@ -36,7 +36,12 @@ npm run package
 npm run package:win
 ```
 
-产物生成在 `release/` 目录。推送到 `main` 或手动运行 Actions 会构建三平台包；推送 `v*` 标签时还会创建 GitHub Release。
+产物生成在 `release/` 目录。推送到 `main` 或手动运行 Actions 会构建三平台包；推送 `v*` 标签时，会等待三个平台全部构建成功，再汇总安装包并创建一次 GitHub Release。
+
+```bash
+git tag v0.1.0
+git push origin v0.1.0
+```
 
 默认构建产物没有商业代码签名证书。Windows 首次运行时可能出现 SmartScreen 提示；正式分发前可在仓库 Secrets 中配置代码签名证书与密码。
 
