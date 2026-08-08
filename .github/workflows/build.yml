@@ -64,6 +64,7 @@ jobs:
             npm run package:mac
           else
             echo "::warning::Apple signing secrets are incomplete; building a fully ad-hoc signed universal app"
+            unset CSC_LINK CSC_KEY_PASSWORD APPLE_ID APPLE_APP_SPECIFIC_PASSWORD APPLE_TEAM_ID
             npm run package:mac:adhoc
           fi
 
