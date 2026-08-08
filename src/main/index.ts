@@ -118,7 +118,7 @@ type TokenLog = {
   group?: string
 }
 
-const QUOTA_PER_USD = 500_000
+const DEFAULT_QUOTA_PER_USD = 500_000
 const COST_MARKUP = 1.1
 const DAY_LABELS = ['一', '二', '三', '四', '五', '六', '日']
 
@@ -157,7 +157,8 @@ async function fetchCostSummary(): Promise<CostSummary> {
   const emptyResult = (message?: string): CostSummary => ({
     available: false,
     total: 0,
-    currency: 'USD',
+    currency: 'CNY',
+    exchangeRate: 0,
     days: week.days,
     callCount: 0,
     tokenBilledCount: 0,
@@ -170,12 +171,28 @@ async function fetchCostSummary(): Promise<CostSummary> {
   })
 
   try {
-    const [pricingResponse, logsResponse] = await Promise.all([
+    const [pricingResponse, logsResponse, statusResponse] = await Promise.all([
       apiFetch('/api/pricing', {}, false),
-      apiFetch('/api/log/token')
+      apiFetch('/api/log/token'),
+      apiFetch('/api/status', {}, false)
     ])
     const pricingBody = (await pricingResponse.json()) as Record<string, unknown>
     const logsBody = (await logsResponse.json()) as Record<string, unknown>
+    const statusBody = (await statusResponse.json()) as Record<string, unknown>
+    const statusData = statusBody.data && typeof statusBody.data === 'object'
+      ? statusBody.data as Record<string, unknown>
+      : {}
+    const exchangeRate = numberValue(statusData.usd_exchange_rate, NaN)
+    const quotaPerUsd = numberValue(statusData.quota_per_unit, DEFAULT_QUOTA_PER_USD)
+    if (
+      statusBody.success === false
+      || !Number.isFinite(exchangeRate)
+      || exchangeRate <= 0
+      || !Number.isFinite(quotaPerUsd)
+      || quotaPerUsd <= 0
+    ) {
+      throw new Error('New API 未返回有效的人民币汇率或单位额度配置')
+    }
     const pricingItems = Array.isArray(pricingBody.data) ? pricingBody.data as PricingItem[] : []
     if (pricingBody.success === false || pricingItems.length === 0) {
       throw new Error(typeof pricingBody.message === 'string' ? pricingBody.message : 'New API 未返回可用模型价格')
@@ -218,7 +235,7 @@ async function fetchCostSummary(): Promise<CostSummary> {
       const quotaType = numberValue(price.quota_type, NaN)
       let cost = NaN
       if (quotaType === 1) {
-        cost = numberValue(price.model_price, NaN) * groupRatio * COST_MARKUP
+        cost = numberValue(price.model_price, NaN) * groupRatio * exchangeRate * COST_MARKUP
         requestBilledCount += Number.isFinite(cost) ? 1 : 0
       } else if (quotaType === 0) {
         const modelRatio = numberValue(price.model_ratio, NaN)
@@ -226,9 +243,9 @@ async function fetchCostSummary(): Promise<CostSummary> {
         const inputTokens = numberValue(log.prompt_tokens)
         const outputTokens = numberValue(log.completion_tokens)
         cost = (
-          inputTokens * modelRatio * groupRatio / QUOTA_PER_USD
-          + outputTokens * modelRatio * completionRatio * groupRatio / QUOTA_PER_USD
-        ) * COST_MARKUP
+          inputTokens * modelRatio * groupRatio / quotaPerUsd
+          + outputTokens * modelRatio * completionRatio * groupRatio / quotaPerUsd
+        ) * exchangeRate * COST_MARKUP
         tokenBilledCount += Number.isFinite(cost) ? 1 : 0
       }
       if (!Number.isFinite(cost) || cost < 0) {
@@ -244,6 +261,7 @@ async function fetchCostSummary(): Promise<CostSummary> {
       ...emptyResult(),
       available: true,
       total,
+      exchangeRate,
       callCount,
       tokenBilledCount,
       requestBilledCount,
@@ -255,7 +273,9 @@ async function fetchCostSummary(): Promise<CostSummary> {
       callCount,
       tokenBilledCount,
       requestBilledCount,
-      unpricedCount
+      unpricedCount,
+      exchangeRate,
+      currency: 'CNY'
     })
     return result
   } catch (error) {

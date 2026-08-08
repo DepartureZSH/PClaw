@@ -42,7 +42,8 @@ export type CostDay = {
 export type CostSummary = {
   available: boolean
   total: number
-  currency: 'USD'
+  currency: 'CNY'
+  exchangeRate: number
   days: CostDay[]
   callCount: number
   tokenBilledCount: number

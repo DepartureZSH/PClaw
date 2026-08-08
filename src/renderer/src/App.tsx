@@ -145,9 +145,9 @@ async function resizeImage(dataUrl: string, targetWidth: number): Promise<string
 }
 
 function formatCost(value: number): string {
-  if (!Number.isFinite(value)) return '$—'
+  if (!Number.isFinite(value)) return '¥—'
   const digits = value > 0 && value < 0.01 ? 4 : 2
-  return `$${value.toFixed(digits)}`
+  return `¥${value.toFixed(digits)}`
 }
 
 function formatDimensions(value?: ImageDimensions | null): string {
@@ -205,7 +205,8 @@ function App() {
   const [cost, setCost] = useState<CostSummary>({
     available: false,
     total: 0,
-    currency: 'USD',
+    currency: 'CNY',
+    exchangeRate: 0,
     days: [],
     callCount: 0,
     tokenBilledCount: 0,
@@ -469,8 +470,8 @@ function App() {
               ? `当前令牌 ${cost.weekStart} 至 ${cost.weekEnd}，共 ${cost.callCount} 次调用`
               : cost.message}
           >
-            <span>本周成本 · USD</span>
-            <strong>{cost.available ? formatCost(cost.total) : '$—'}</strong>
+            <span>本周成本 · CNY</span>
+            <strong>{cost.available ? formatCost(cost.total) : '¥—'}</strong>
           </button>
           <button className="icon-button" aria-label="运行日志" onClick={() => void openLogs()}><ScrollText size={18} /></button>
           <button className="icon-button" aria-label="连接设置" onClick={() => setSettingsOpen(true)}><Settings size={18} /></button>
@@ -688,7 +689,7 @@ function CostChart({
   return (
     <section className="cost-chart" aria-label="本周成本统计">
       <div className="cost-chart-head">
-        <div><span>当前令牌 · 本周</span><strong>{summary.available ? formatCost(summary.total) : '$—'}</strong></div>
+        <div><span>当前令牌 · 本周</span><strong>{summary.available ? formatCost(summary.total) : '¥—'}</strong></div>
         <button type="button" onClick={onRefresh} disabled={refreshing} aria-label="刷新成本统计" title="刷新成本统计">
           <RefreshCw className={refreshing ? 'spin' : ''} size={13} />
         </button>
@@ -711,7 +712,9 @@ function CostChart({
         <span>按次 {summary.requestBilledCount}</span>
         {summary.unpricedCount > 0 && <span className="unpriced">未计价 {summary.unpricedCount}</span>}
       </div>
-      <small>{summary.message || (summary.available ? `共 ${summary.callCount} 次 · 更新于 ${new Date(summary.updatedAt).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' })}` : '配置 API Key 后显示成本')}</small>
+      <small>{summary.available
+        ? `${summary.message ? `${summary.message} · ` : ''}汇率 1 USD = ¥${summary.exchangeRate.toFixed(2)} · 共 ${summary.callCount} 次 · 更新于 ${new Date(summary.updatedAt).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' })}`
+        : summary.message || '配置 API Key 后显示成本'}</small>
     </section>
   )
 }
