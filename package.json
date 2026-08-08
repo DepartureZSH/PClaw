@@ -1,17 +1,15 @@
 {
   "name": "pclaw",
-  "version": "0.1.6",
-  "description": "PClaw - Windows-first AI image editing desktop app",
+  "version": "0.1.7",
+  "description": "PClaw - AI image editing desktop app for Windows",
   "main": "out/main/index.js",
   "author": "DepartureZSH",
   "license": "MIT",
   "scripts": {
     "dev": "electron-vite dev",
     "build": "tsc --noEmit && electron-vite build",
-    "package": "npm run build && electron-builder --publish never",
+    "package": "npm run package:win",
     "package:win": "npm run build && electron-builder --win nsis portable --publish never",
-    "package:mac": "npm run build && electron-builder --mac --universal --publish never",
-    "package:mac:adhoc": "npm run build && CSC_IDENTITY_AUTO_DISCOVERY=false electron-builder --mac --universal -c.mac.hardenedRuntime=false -c.mac.notarize=false --publish never",
     "typecheck": "tsc --noEmit",
     "lint": "npm run typecheck"
   },
@@ -58,18 +56,6 @@
     },
     "portable": {
       "artifactName": "PClaw-Portable-${version}-${arch}.${ext}"
-    },
-    "mac": {
-      "target": "dmg",
-      "category": "public.app-category.graphics-design",
-      "hardenedRuntime": true,
-      "notarize": true
-    },
-    "linux": {
-      "target": [
-        "AppImage"
-      ],
-      "category": "Graphics"
     }
   },
   "allowScripts": {

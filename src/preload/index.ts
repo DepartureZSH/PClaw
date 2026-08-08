@@ -1,5 +1,5 @@
 import { contextBridge, ipcRenderer } from 'electron'
-import type { ApiSettings, EditRequest, EditResponse, LogEntry, ModelInfo, UsageInfo } from '../shared/types'
+import type { ApiSettings, CostSummary, EditRequest, EditResponse, LogEntry, ModelInfo } from '../shared/types'
 
 const desktopApi = {
   openImage: (): Promise<{ dataUrl: string; fileName: string } | null> => ipcRenderer.invoke('file:open-image'),
@@ -9,7 +9,7 @@ const desktopApi = {
   saveSettings: (baseUrl: string, apiKey?: string): Promise<ApiSettings> =>
     ipcRenderer.invoke('settings:save', { baseUrl, apiKey }),
   fetchModels: (): Promise<ModelInfo[]> => ipcRenderer.invoke('api:models'),
-  fetchUsage: (): Promise<UsageInfo> => ipcRenderer.invoke('api:usage'),
+  fetchCost: (): Promise<CostSummary> => ipcRenderer.invoke('api:cost'),
   editImage: (request: EditRequest): Promise<EditResponse> => ipcRenderer.invoke('api:edit-image', request),
   listLogs: (): Promise<LogEntry[]> => ipcRenderer.invoke('logs:list'),
   clearLogs: (): Promise<LogEntry[]> => ipcRenderer.invoke('logs:clear'),

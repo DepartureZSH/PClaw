@@ -4,10 +4,11 @@ import { readFile, writeFile } from 'node:fs/promises'
 import Store from 'electron-store'
 import type {
   ApiSettings,
+  CostDay,
+  CostSummary,
   EditRequest,
   EditResponse,
   ModelInfo,
-  UsageInfo,
   UsedEditProtocol
 } from '../shared/types'
 import { clearLogs, formatLogs, listLogs, writeLog } from './logger'
@@ -63,15 +64,15 @@ function settings(): ApiSettings {
   return { baseUrl: store.get('baseUrl'), hasApiKey: Boolean(getApiKey()) }
 }
 
-async function apiFetch(path: string, init: RequestInit = {}): Promise<Response> {
+async function apiFetch(path: string, init: RequestInit = {}, authenticated = true): Promise<Response> {
   const apiKey = getApiKey()
-  if (!apiKey) throw new Error('请先在设置中填写 New API Key')
+  if (authenticated && !apiKey) throw new Error('请先在设置中填写 New API Key')
   let response: Response
   try {
     response = await fetch(`${normalizeBaseUrl(store.get('baseUrl'))}${path}`, {
       ...init,
       headers: {
-        Authorization: `Bearer ${apiKey}`,
+        ...(authenticated ? { Authorization: `Bearer ${apiKey}` } : {}),
         ...init.headers
       }
     })
@@ -98,6 +99,169 @@ async function apiFetch(path: string, init: RequestInit = {}): Promise<Response>
     throw new ApiRequestError(message, path, response.status, requestId, body.slice(0, 1000))
   }
   return response
+}
+
+type PricingItem = {
+  model_name?: string
+  quota_type?: number | string
+  model_ratio?: number | string
+  model_price?: number | string
+  completion_ratio?: number | string
+}
+
+type TokenLog = {
+  created_at?: number | string
+  type?: number | string
+  model_name?: string
+  prompt_tokens?: number | string
+  completion_tokens?: number | string
+  group?: string
+}
+
+const QUOTA_PER_USD = 500_000
+const COST_MARKUP = 1.1
+const DAY_LABELS = ['一', '二', '三', '四', '五', '六', '日']
+
+function localDateKey(date: Date): string {
+  const year = date.getFullYear()
+  const month = String(date.getMonth() + 1).padStart(2, '0')
+  const day = String(date.getDate()).padStart(2, '0')
+  return `${year}-${month}-${day}`
+}
+
+function currentWeek(now = new Date()): { start: Date; end: Date; days: CostDay[] } {
+  const start = new Date(now)
+  start.setHours(0, 0, 0, 0)
+  start.setDate(start.getDate() - ((start.getDay() + 6) % 7))
+  const end = new Date(start)
+  end.setDate(end.getDate() + 6)
+  end.setHours(23, 59, 59, 999)
+  const today = localDateKey(now)
+  const days = DAY_LABELS.map((label, index) => {
+    const date = new Date(start)
+    date.setDate(date.getDate() + index)
+    const key = localDateKey(date)
+    return { date: key, label, cost: 0, isToday: key === today }
+  })
+  return { start, end, days }
+}
+
+function numberValue(value: unknown, fallback = 0): number {
+  const parsed = Number(value)
+  return Number.isFinite(parsed) ? parsed : fallback
+}
+
+async function fetchCostSummary(): Promise<CostSummary> {
+  const now = new Date()
+  const week = currentWeek(now)
+  const emptyResult = (message?: string): CostSummary => ({
+    available: false,
+    total: 0,
+    currency: 'USD',
+    days: week.days,
+    callCount: 0,
+    tokenBilledCount: 0,
+    requestBilledCount: 0,
+    unpricedCount: 0,
+    weekStart: localDateKey(week.start),
+    weekEnd: localDateKey(week.end),
+    updatedAt: Date.now(),
+    message
+  })
+
+  try {
+    const [pricingResponse, logsResponse] = await Promise.all([
+      apiFetch('/api/pricing', {}, false),
+      apiFetch('/api/log/token')
+    ])
+    const pricingBody = (await pricingResponse.json()) as Record<string, unknown>
+    const logsBody = (await logsResponse.json()) as Record<string, unknown>
+    const pricingItems = Array.isArray(pricingBody.data) ? pricingBody.data as PricingItem[] : []
+    if (pricingBody.success === false || pricingItems.length === 0) {
+      throw new Error(typeof pricingBody.message === 'string' ? pricingBody.message : 'New API 未返回可用模型价格')
+    }
+    const rawLogData = logsBody.data
+    if (logsBody.success === false || !Array.isArray(rawLogData)) {
+      throw new Error(typeof logsBody.message === 'string' ? logsBody.message : 'New API 未返回当前令牌消费日志')
+    }
+    const logs = Array.isArray(rawLogData)
+      ? rawLogData as TokenLog[]
+      : []
+    const rawGroupRatios = pricingBody.group_ratio && typeof pricingBody.group_ratio === 'object'
+      ? pricingBody.group_ratio as Record<string, unknown>
+      : {}
+    const groupRatios = new Map(Object.entries(rawGroupRatios).map(([group, ratio]) => [group, numberValue(ratio, NaN)]))
+    const pricingByModel = new Map(pricingItems
+      .filter((item) => typeof item.model_name === 'string')
+      .map((item) => [item.model_name as string, item]))
+    const dayByDate = new Map(week.days.map((day) => [day.date, day]))
+    let total = 0
+    let callCount = 0
+    let tokenBilledCount = 0
+    let requestBilledCount = 0
+    let unpricedCount = 0
+
+    for (const log of logs) {
+      const createdAt = numberValue(log.created_at)
+      const createdDate = new Date(createdAt > 10_000_000_000 ? createdAt : createdAt * 1000)
+      if (!Number.isFinite(createdDate.getTime()) || createdDate < week.start || createdDate > week.end) continue
+      if (log.type !== undefined && numberValue(log.type) !== 2) continue
+      callCount += 1
+      const price = pricingByModel.get(log.model_name || '')
+      const group = log.group || 'default'
+      const groupRatio = groupRatios.get(group)
+      if (!price || !Number.isFinite(groupRatio)) {
+        unpricedCount += 1
+        continue
+      }
+
+      const quotaType = numberValue(price.quota_type, NaN)
+      let cost = NaN
+      if (quotaType === 1) {
+        cost = numberValue(price.model_price, NaN) * groupRatio * COST_MARKUP
+        requestBilledCount += Number.isFinite(cost) ? 1 : 0
+      } else if (quotaType === 0) {
+        const modelRatio = numberValue(price.model_ratio, NaN)
+        const completionRatio = numberValue(price.completion_ratio, NaN)
+        const inputTokens = numberValue(log.prompt_tokens)
+        const outputTokens = numberValue(log.completion_tokens)
+        cost = (
+          inputTokens * modelRatio * groupRatio / QUOTA_PER_USD
+          + outputTokens * modelRatio * completionRatio * groupRatio / QUOTA_PER_USD
+        ) * COST_MARKUP
+        tokenBilledCount += Number.isFinite(cost) ? 1 : 0
+      }
+      if (!Number.isFinite(cost) || cost < 0) {
+        unpricedCount += 1
+        continue
+      }
+      total += cost
+      const bucket = dayByDate.get(localDateKey(createdDate))
+      if (bucket) bucket.cost += cost
+    }
+
+    const result: CostSummary = {
+      ...emptyResult(),
+      available: true,
+      total,
+      callCount,
+      tokenBilledCount,
+      requestBilledCount,
+      unpricedCount,
+      message: unpricedCount > 0 ? `${unpricedCount} 次调用缺少模型或分组价格，未计入` : undefined
+    }
+    writeLog('info', 'api.cost', '本周成本统计获取成功', {
+      total: Number(total.toFixed(6)),
+      callCount,
+      tokenBilledCount,
+      requestBilledCount,
+      unpricedCount
+    })
+    return result
+  } catch (error) {
+    writeLog('warn', 'api.cost.unavailable', errorMessage(error), errorDetails(error))
+    return emptyResult('成本统计暂不可用，请查看运行日志')
+  }
 }
 
 function dataUrlToBuffer(dataUrl: string): { buffer: Buffer; mime: string } {
@@ -340,35 +504,7 @@ function registerIpc(): void {
     }
   })
 
-  ipcMain.handle('api:usage', async (): Promise<UsageInfo> => {
-    try {
-      const response = await apiFetch('/api/usage/token/')
-      const body = (await response.json()) as Record<string, unknown>
-      const data = (body.data || body) as Record<string, unknown>
-      const used = Number(data.total_used ?? data.used ?? NaN)
-      const granted = Number(data.total_granted ?? NaN)
-      const remaining = Number(data.total_available ?? data.remaining ?? NaN)
-      if (Number.isFinite(used)) {
-        const result: UsageInfo = {
-          available: true,
-          used,
-          granted: Number.isFinite(granted) ? granted : undefined,
-          remaining: Number.isFinite(remaining) ? remaining : undefined,
-          unlimited: data.unlimited_quota === true,
-          unit: 'quota'
-        }
-        writeLog('info', 'api.usage', '令牌使用量获取成功', {
-          used,
-          unlimited: result.unlimited || false
-        })
-        return result
-      }
-    } catch (error) {
-      writeLog('warn', 'api.usage.unavailable', errorMessage(error), errorDetails(error))
-      // Older New API deployments may not expose token usage lookup.
-    }
-    return { available: false, message: '使用量需登录控制台查看' }
-  })
+  ipcMain.handle('api:cost', fetchCostSummary)
 
   ipcMain.handle('api:edit-image', async (_event, request: EditRequest): Promise<EditResponse> => {
     const requestedProtocol = request.protocol || 'auto'

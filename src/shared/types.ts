@@ -32,13 +32,25 @@ export type EditResponse = {
   protocol: UsedEditProtocol
 }
 
-export type UsageInfo = {
+export type CostDay = {
+  date: string
+  label: string
+  cost: number
+  isToday: boolean
+}
+
+export type CostSummary = {
   available: boolean
-  used?: number
-  granted?: number
-  remaining?: number
-  unlimited?: boolean
-  unit?: 'quota'
+  total: number
+  currency: 'USD'
+  days: CostDay[]
+  callCount: number
+  tokenBilledCount: number
+  requestBilledCount: number
+  unpricedCount: number
+  weekStart: string
+  weekEnd: string
+  updatedAt: number
   message?: string
 }
 

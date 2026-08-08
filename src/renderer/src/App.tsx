@@ -24,7 +24,7 @@ import {
   WandSparkles,
   X
 } from 'lucide-react'
-import type { ApiSettings, EditProtocol, LogEntry, ModelInfo, UsageInfo, UsedEditProtocol } from '../../shared/types'
+import type { ApiSettings, CostSummary, EditProtocol, LogEntry, ModelInfo, UsedEditProtocol } from '../../shared/types'
 
 type Adjustments = {
   brightness: number
@@ -144,9 +144,10 @@ async function resizeImage(dataUrl: string, targetWidth: number): Promise<string
   return canvas.toDataURL('image/png')
 }
 
-function formatUsage(value?: number): string {
-  if (value === undefined || !Number.isFinite(value)) return '—'
-  return Intl.NumberFormat('zh-CN', { notation: 'compact', maximumFractionDigits: 2 }).format(value)
+function formatCost(value: number): string {
+  if (!Number.isFinite(value)) return '$—'
+  const digits = value > 0 && value < 0.01 ? 4 : 2
+  return `$${value.toFixed(digits)}`
 }
 
 function formatDimensions(value?: ImageDimensions | null): string {
@@ -201,7 +202,21 @@ function App() {
   const [logs, setLogs] = useState<LogEntry[]>([])
   const [apiSettings, setApiSettings] = useState<ApiSettings>({ baseUrl: 'https://chatbot.cn.unreachablecity.club', hasApiKey: false })
   const [apiKey, setApiKey] = useState('')
-  const [usage, setUsage] = useState<UsageInfo>({ available: false, message: '未连接' })
+  const [cost, setCost] = useState<CostSummary>({
+    available: false,
+    total: 0,
+    currency: 'USD',
+    days: [],
+    callCount: 0,
+    tokenBilledCount: 0,
+    requestBilledCount: 0,
+    unpricedCount: 0,
+    weekStart: '',
+    weekEnd: '',
+    updatedAt: 0,
+    message: '未连接'
+  })
+  const [costRefreshing, setCostRefreshing] = useState(false)
   const cropStageRef = useRef<HTMLDivElement>(null)
   const dragging = useRef<{ startX: number; startY: number; startCrop: CropRect } | null>(null)
 
@@ -228,9 +243,9 @@ function App() {
     const current = await window.pclaw.getSettings()
     setApiSettings(current)
     if (!current.hasApiKey) return
-    const [modelResult, usageResult] = await Promise.allSettled([
+    const [modelResult, costResult] = await Promise.allSettled([
       window.pclaw.fetchModels(),
-      window.pclaw.fetchUsage()
+      window.pclaw.fetchCost()
     ])
     if (modelResult.status === 'fulfilled') {
       const imageModels = modelResult.value.filter((item) => /image|banana|flux|dall|seedream|ideogram/i.test(item.id))
@@ -238,15 +253,18 @@ function App() {
       setModels(list)
       if (list[0]) setModel(list[0].id)
     }
-    if (usageResult.status === 'fulfilled') setUsage(usageResult.value)
+    if (costResult.status === 'fulfilled') setCost(costResult.value)
   }, [])
 
-  const refreshUsage = useCallback(async () => {
+  const refreshCost = useCallback(async () => {
     if (!window.pclaw || !apiSettings.hasApiKey) return
+    setCostRefreshing(true)
     try {
-      setUsage(await window.pclaw.fetchUsage())
+      setCost(await window.pclaw.fetchCost())
     } catch (error) {
-      setNotice(error instanceof Error ? error.message : '使用量刷新失败')
+      setNotice(error instanceof Error ? error.message : '成本统计刷新失败')
+    } finally {
+      setCostRefreshing(false)
     }
   }, [apiSettings.hasApiKey])
 
@@ -344,8 +362,7 @@ function App() {
       setAdjustments(DEFAULT_ADJUSTMENTS)
       await inspectDimensions(response.imageDataUrl, 'result')
       setNotice(`AI 编辑完成 · ${protocolName(response.protocol)}`)
-      const freshUsage = await window.pclaw.fetchUsage()
-      setUsage(freshUsage)
+      setCost(await window.pclaw.fetchCost())
     } catch (error) {
       setNotice(error instanceof Error ? error.message : '生成失败，请检查配置')
     } finally {
@@ -446,14 +463,14 @@ function App() {
         </div>
         <div className="top-actions">
           <button
-            className="usage-meter"
-            onClick={() => void refreshUsage()}
-            title={usage.available
-              ? `已用 ${usage.used ?? 0} / 总额度 ${usage.granted ?? '—'} / 剩余 ${usage.remaining ?? '—'}`
-              : usage.message}
+            className="cost-meter"
+            onClick={() => void refreshCost()}
+            title={cost.available
+              ? `当前令牌 ${cost.weekStart} 至 ${cost.weekEnd}，共 ${cost.callCount} 次调用`
+              : cost.message}
           >
-            <span>使用量</span>
-            <strong>{usage.unlimited ? formatUsage(usage.used) : usage.available ? formatUsage(usage.used) : '—'}</strong>
+            <span>本周成本 · USD</span>
+            <strong>{cost.available ? formatCost(cost.total) : '$—'}</strong>
           </button>
           <button className="icon-button" aria-label="运行日志" onClick={() => void openLogs()}><ScrollText size={18} /></button>
           <button className="icon-button" aria-label="连接设置" onClick={() => setSettingsOpen(true)}><Settings size={18} /></button>
@@ -553,6 +570,8 @@ function App() {
         <aside className="ai-panel">
           <div className="panel-heading"><div><WandSparkles size={18} /><strong>AI 编辑</strong></div><span className={apiSettings.hasApiKey ? 'connected' : ''}>{apiSettings.hasApiKey ? '已连接' : '未连接'}</span></div>
 
+          <CostChart summary={cost} refreshing={costRefreshing} onRefresh={() => void refreshCost()} />
+
           <label className="field-label" htmlFor="model">模型</label>
           <div className="select-wrap">
             <select id="model" value={model} onChange={(event) => setModel(event.target.value)}>
@@ -599,12 +618,14 @@ function App() {
           </div>
 
           <div className="panel-spacer" />
-          <div className="cost-note"><Sparkles size={14} /><span>实际费用由所选模型与 New API 分组倍率决定</span></div>
-          <button className="generate-button" disabled={generating || !original} onClick={generate}>
-            {generating ? <LoaderCircle className="spin" /> : <Sparkles />}
-            {generating ? '正在生成…' : '开始 AI 编辑'}
-          </button>
-          <button className="replace-button" onClick={openImage}><Upload size={15} /> {original ? '更换原图' : '导入原图'}</button>
+          <div className="panel-footer">
+            <div className="cost-note"><Sparkles size={14} /><span>成本按 New API 当前价格与分组倍率计算，并统一加 10%</span></div>
+            <button className="generate-button" disabled={generating || !original} onClick={generate}>
+              {generating ? <LoaderCircle className="spin" /> : <Sparkles />}
+              {generating ? '正在生成…' : '开始 AI 编辑'}
+            </button>
+            <button className="replace-button" onClick={openImage}><Upload size={15} /> {original ? '更换原图' : '导入原图'}</button>
+          </div>
         </aside>
       </section>
 
@@ -651,6 +672,47 @@ function App() {
 
       {notice && <div className="toast"><Check size={16} />{notice}</div>}
     </main>
+  )
+}
+
+function CostChart({
+  summary,
+  refreshing,
+  onRefresh
+}: {
+  summary: CostSummary
+  refreshing: boolean
+  onRefresh: () => void
+}) {
+  const maxCost = Math.max(...summary.days.map((day) => day.cost), 0)
+  return (
+    <section className="cost-chart" aria-label="本周成本统计">
+      <div className="cost-chart-head">
+        <div><span>当前令牌 · 本周</span><strong>{summary.available ? formatCost(summary.total) : '$—'}</strong></div>
+        <button type="button" onClick={onRefresh} disabled={refreshing} aria-label="刷新成本统计" title="刷新成本统计">
+          <RefreshCw className={refreshing ? 'spin' : ''} size={13} />
+        </button>
+      </div>
+      <div className="cost-bars">
+        {summary.days.length > 0 ? summary.days.map((day) => {
+          const height = maxCost > 0 ? Math.max(4, day.cost / maxCost * 100) : 4
+          return (
+            <div className={`cost-day ${day.isToday ? 'today' : ''}`} key={day.date} title={`${day.date} · ${formatCost(day.cost)}`}>
+              <div className="cost-bar-track"><i style={{ height: `${height}%` }} /></div>
+              <span>{day.label}</span>
+            </div>
+          )
+        }) : ['一', '二', '三', '四', '五', '六', '日'].map((label) => (
+          <div className="cost-day" key={label}><div className="cost-bar-track"><i style={{ height: '4%' }} /></div><span>{label}</span></div>
+        ))}
+      </div>
+      <div className="cost-chart-meta">
+        <span>Token {summary.tokenBilledCount}</span>
+        <span>按次 {summary.requestBilledCount}</span>
+        {summary.unpricedCount > 0 && <span className="unpriced">未计价 {summary.unpricedCount}</span>}
+      </div>
+      <small>{summary.message || (summary.available ? `共 ${summary.callCount} 次 · 更新于 ${new Date(summary.updatedAt).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' })}` : '配置 API Key 后显示成本')}</small>
+    </section>
   )
 }
 
