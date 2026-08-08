@@ -118,6 +118,8 @@ input[type='range']::-webkit-slider-thumb { appearance:none; width:12px; height:
 .select-wrap select, .size-row select { appearance:none; width:100%; height:38px; border:1px solid #30322c; background:#191a17; border-radius:8px; color:#e3e5de; outline:0; padding:0 34px 0 11px; font-size:10px; }
 .select-wrap select:focus, .size-row select:focus, .settings-modal input:focus, .prompt-wrap:focus-within { border-color:#647544; }
 .select-wrap svg { position:absolute; right:11px; top:12px; pointer-events:none; color:#6d7168; }
+.protocol-select { margin-bottom:18px; }
+.protocol-select small { display:block; margin-top:6px; color:#6f7860; font-size:8px; letter-spacing:.01em; }
 .preset-heading { display:flex; justify-content:space-between; align-items:center; }
 .preset-heading span { color:#5f625b; font-size:9px; }
 .preset-grid { display:grid; grid-template-columns:1fr 1fr; gap:6px; margin-bottom:18px; }

@@ -8,7 +8,8 @@ PClaw 是一个 Windows 优先、跨平台的 AI 图片编辑桌面应用。它�
 - 本地导入 PNG / JPG / JPEG / WebP，结果可另存为 PNG
 - 亮度、对比度、饱和度、旋转、翻转、裁剪、撤销与重做
 - 从 New API 动态获取可用模型，并提供图像模型优先筛选
-- 自动兼容 OpenAI Images multipart 与多模态 Chat JSON 两种图片编辑协议
+- 自动识别并支持 OpenAI multipart、Seedream JSON generations、Qwen DashScope JSON 与多模态 Chat JSON
+- 可手动指定接口协议，避免模型名称映射特殊时调用错误端点
 - 提示词预设、自定义提示词与常见输出尺寸
 - 本地运行日志记录端点、模型、状态码与请求 ID，支持刷新、清空和导出
 - API Key 在 Electron 主进程中通过操作系统安全存储加密
@@ -49,13 +50,16 @@ git push origin v0.1.0
 
 ## New API 接口
 
-PClaw 使用 OpenAI 兼容接口：
+PClaw 通过 New API 按模型使用不同接口：
 
 - `GET /v1/models`
-- `POST /v1/images/edits`
+- OpenAI GPT Image / DALL-E：`POST /v1/images/edits`，`multipart/form-data`
+- Seedream / SeedEdit：`POST /v1/images/generations`，JSON `image` 数组
+- Qwen Image：`POST /v1/images/edits`，由 New API 将 DashScope JSON 转发给阿里云
+- Gemini / Nano Banana：`POST /v1/chat/completions`，多模态 JSON
 - `GET /api/usage/token`（可选；部分部署不会开放令牌余额查询）
 
-图像编辑模型是否可用、支持的尺寸以及计费方式由 New API 实例中的渠道配置决定。
+“自动识别”会根据模型名选择协议；如果 New API 使用了自定义模型映射，可在界面中手动指定协议。图像编辑模型是否可用、支持的尺寸以及计费方式由 New API 实例中的渠道配置决定。
 
 ## 安全说明
 

@@ -24,7 +24,7 @@ import {
   WandSparkles,
   X
 } from 'lucide-react'
-import type { ApiSettings, BalanceInfo, LogEntry, ModelInfo } from '../../shared/types'
+import type { ApiSettings, BalanceInfo, EditProtocol, LogEntry, ModelInfo, UsedEditProtocol } from '../../shared/types'
 
 type Adjustments = {
   brightness: number
@@ -58,7 +58,38 @@ const PRESETS = [
   { name: '海马体·白底', prompt: '自然精致微调，保留原生五官，肤质细腻，轻美颜，不失真，高清证件照，纯白色纯色背景，海马体精致证件照风格，年轻东亚人物，面部清晰自然，五官端正，表情温和，影棚柔光，均匀布光，细腻皮肤纹理，淡妆精致，无多余装饰，无AI畸形，无模糊，8K高清，RAW画质，细节饱满，正式得体，不修改面部表情和五官。' }
 ]
 
-const FALLBACK_MODELS = ['gpt-image-1', 'gpt-image-1.5', 'gemini-2.5-flash-image', 'nano-banana-pro']
+const FALLBACK_MODELS = [
+  'gpt-image-1',
+  'gpt-image-1.5',
+  'doubao-seedream-5-0-260128',
+  'qwen-image-2.0-pro',
+  'gemini-2.5-flash-image',
+  'nano-banana-pro'
+]
+
+const PROTOCOL_OPTIONS: Array<{ value: EditProtocol; label: string }> = [
+  { value: 'auto', label: '自动识别（推荐）' },
+  { value: 'openai-images-edits', label: 'OpenAI Image Edits · multipart' },
+  { value: 'seedream-generations', label: 'Seedream · JSON generations' },
+  { value: 'qwen-multimodal', label: 'Qwen Image · DashScope JSON' },
+  { value: 'chat-completions', label: '多模态 Chat · JSON' }
+]
+
+function inferProtocol(model: string): UsedEditProtocol {
+  if (/seedream|seededit/i.test(model)) return 'seedream-generations'
+  if (/qwen[-_.]?(image|image-edit)|wanx/i.test(model)) return 'qwen-multimodal'
+  if (/gemini|banana/i.test(model)) return 'chat-completions'
+  return 'openai-images-edits'
+}
+
+function protocolName(protocol: UsedEditProtocol): string {
+  return {
+    'openai-images-edits': 'OpenAI multipart',
+    'seedream-generations': 'Seedream JSON',
+    'qwen-multimodal': 'Qwen DashScope JSON',
+    'chat-completions': '多模态 Chat JSON'
+  }[protocol]
+}
 
 function loadImage(dataUrl: string): Promise<HTMLImageElement> {
   return new Promise((resolve, reject) => {
@@ -121,6 +152,7 @@ function App() {
   const [crop, setCrop] = useState<CropRect>({ x: 0.12, y: 0.12, width: 0.76, height: 0.76 })
   const [models, setModels] = useState<ModelInfo[]>([])
   const [model, setModel] = useState(FALLBACK_MODELS[0])
+  const [protocol, setProtocol] = useState<EditProtocol>('auto')
   const [prompt, setPrompt] = useState(PRESETS[0].prompt)
   const [selectedPreset, setSelectedPreset] = useState(PRESETS[0].name)
   const [size, setSize] = useState('auto')
@@ -138,6 +170,7 @@ function App() {
   const displaySource = result || original
   const cssTransform = `rotate(${adjustments.rotation}deg) scale(${adjustments.flipX ? -1 : 1}, ${adjustments.flipY ? -1 : 1})`
   const cssFilter = `brightness(${adjustments.brightness}%) contrast(${adjustments.contrast}%) saturate(${adjustments.saturation}%)`
+  const resolvedProtocol = protocol === 'auto' ? inferProtocol(model) : protocol
 
   const loadConnection = useCallback(async () => {
     if (!window.pclaw) return
@@ -238,11 +271,11 @@ function App() {
     setGenerating(true)
     try {
       const prepared = await bakeImage(original, adjustments)
-      const response = await window.pclaw.editImage({ imageDataUrl: prepared, fileName, prompt: prompt.trim(), model, size })
+      const response = await window.pclaw.editImage({ imageDataUrl: prepared, fileName, prompt: prompt.trim(), model, size, protocol })
       setResult(response.imageDataUrl)
       setAdjustments(DEFAULT_ADJUSTMENTS)
       await inspectDimensions(response.imageDataUrl, 'result')
-      setNotice('AI 编辑完成')
+      setNotice(`AI 编辑完成 · ${protocolName(response.protocol)}`)
       const freshBalance = await window.pclaw.fetchBalance()
       setBalance(freshBalance)
     } catch (error) {
@@ -448,6 +481,15 @@ function App() {
               {modelOptions.map((item) => <option key={item} value={item}>{item}</option>)}
             </select>
             <ChevronDown size={15} />
+          </div>
+
+          <label className="field-label" htmlFor="protocol">接口协议</label>
+          <div className="select-wrap protocol-select">
+            <select id="protocol" value={protocol} onChange={(event) => setProtocol(event.target.value as EditProtocol)}>
+              {PROTOCOL_OPTIONS.map((item) => <option key={item.value} value={item.value}>{item.label}</option>)}
+            </select>
+            <ChevronDown size={15} />
+            <small>本次使用：{protocolName(resolvedProtocol)}</small>
           </div>
 
           <div className="preset-heading"><label className="field-label">提示词预设</label><span>{PRESETS.length} 个</span></div>

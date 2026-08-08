@@ -8,18 +8,28 @@ export type ModelInfo = {
   ownedBy?: string
 }
 
+export type EditProtocol =
+  | 'auto'
+  | 'openai-images-edits'
+  | 'seedream-generations'
+  | 'qwen-multimodal'
+  | 'chat-completions'
+
+export type UsedEditProtocol = Exclude<EditProtocol, 'auto'>
+
 export type EditRequest = {
   imageDataUrl: string
   fileName: string
   prompt: string
   model: string
   size?: string
+  protocol?: EditProtocol
 }
 
 export type EditResponse = {
   imageDataUrl: string
   revisedPrompt?: string
-  protocol: 'images-edits' | 'chat-completions'
+  protocol: UsedEditProtocol
 }
 
 export type BalanceInfo = {

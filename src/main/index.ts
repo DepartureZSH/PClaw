@@ -2,7 +2,14 @@ import { app, BrowserWindow, dialog, ipcMain, safeStorage } from 'electron'
 import { join, extname } from 'node:path'
 import { readFile, writeFile } from 'node:fs/promises'
 import Store from 'electron-store'
-import type { ApiSettings, BalanceInfo, EditRequest, EditResponse, ModelInfo } from '../shared/types'
+import type {
+  ApiSettings,
+  BalanceInfo,
+  EditRequest,
+  EditResponse,
+  ModelInfo,
+  UsedEditProtocol
+} from '../shared/types'
 import { clearLogs, formatLogs, listLogs, writeLog } from './logger'
 
 type SettingsStore = {
@@ -108,18 +115,21 @@ function errorDetails(error: unknown): Record<string, unknown> {
   return {
     endpoint: error.path,
     status: error.status,
-    requestId: error.requestId || null
+    requestId: error.requestId || null,
+    responsePreview: error.responseBody
+      ? error.responseBody
+        .replace(/data:image\/[A-Za-z0-9.+-]+;base64,[A-Za-z0-9+/=\r\n]+/g, '[image data hidden]')
+        .replace(/sk-[A-Za-z0-9_-]{8,}/g, '[API key hidden]')
+        .slice(0, 500)
+      : null
   }
 }
 
-function supportsNativeImageEdits(model: string): boolean {
-  return /(^|[-_.])(gpt-image|dall-e)/i.test(model)
-}
-
-function shouldTryAlternateProtocol(error: unknown): boolean {
-  if (!(error instanceof ApiRequestError)) return false
-  return [400, 404, 405, 415, 422].includes(error.status)
-    || /parse.*json|json body|multipart|content[- ]type|unsupported/i.test(error.message)
+function inferEditProtocol(model: string): UsedEditProtocol {
+  if (/seedream|seededit/i.test(model)) return 'seedream-generations'
+  if (/qwen[-_.]?(image|image-edit)|wanx/i.test(model)) return 'qwen-multimodal'
+  if (/gemini|banana/i.test(model)) return 'chat-completions'
+  return 'openai-images-edits'
 }
 
 function findImageSource(value: unknown, key = ''): string | undefined {
@@ -165,7 +175,19 @@ async function imageSourceToDataUrl(source: string): Promise<string> {
   return `data:${contentType};base64,${resultBuffer.toString('base64')}`
 }
 
-async function editWithImagesApi(request: EditRequest): Promise<EditResponse> {
+async function parseImageResponse(response: Response, protocol: UsedEditProtocol): Promise<EditResponse> {
+  const body = (await response.json()) as Record<string, unknown>
+  const source = findImageSource(body)
+  if (!source) throw new Error('图片接口成功返回，但响应中没有可识别的图片')
+  const item = Array.isArray(body.data) ? body.data[0] as Record<string, unknown> | undefined : undefined
+  return {
+    imageDataUrl: await imageSourceToDataUrl(source),
+    revisedPrompt: typeof item?.revised_prompt === 'string' ? item.revised_prompt : undefined,
+    protocol
+  }
+}
+
+async function editWithOpenAiImagesApi(request: EditRequest): Promise<EditResponse> {
   const { buffer, mime } = dataUrlToBuffer(request.imageDataUrl)
   const form = new FormData()
   form.append('image', new Blob([buffer], { type: mime }), request.fileName || 'image.png')
@@ -175,15 +197,51 @@ async function editWithImagesApi(request: EditRequest): Promise<EditResponse> {
   form.append('response_format', 'b64_json')
 
   const response = await apiFetch('/v1/images/edits', { method: 'POST', body: form })
-  const body = (await response.json()) as Record<string, unknown>
-  const source = findImageSource(body)
-  if (!source) throw new Error('图像编辑接口成功返回，但响应中没有可识别的图片')
-  const item = Array.isArray(body.data) ? body.data[0] as Record<string, unknown> | undefined : undefined
-  return {
-    imageDataUrl: await imageSourceToDataUrl(source),
-    revisedPrompt: typeof item?.revised_prompt === 'string' ? item.revised_prompt : undefined,
-    protocol: 'images-edits'
+  return parseImageResponse(response, 'openai-images-edits')
+}
+
+async function editWithSeedreamApi(request: EditRequest): Promise<EditResponse> {
+  const body: Record<string, unknown> = {
+    model: request.model,
+    prompt: request.prompt,
+    image: [request.imageDataUrl],
+    response_format: 'b64_json',
+    watermark: false
   }
+  if (request.size && request.size !== 'auto') body.size = request.size
+
+  const response = await apiFetch('/v1/images/generations', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body)
+  })
+  return parseImageResponse(response, 'seedream-generations')
+}
+
+async function editWithQwenApi(request: EditRequest): Promise<EditResponse> {
+  const parameters: Record<string, unknown> = { n: 1, watermark: false }
+  if (request.size && request.size !== 'auto') parameters.size = request.size.replace('x', '*')
+
+  const response = await apiFetch('/v1/images/edits', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      model: request.model,
+      prompt: request.prompt,
+      response_format: 'b64_json',
+      input: {
+        messages: [{
+          role: 'user',
+          content: [
+            { image: request.imageDataUrl },
+            { text: request.prompt }
+          ]
+        }]
+      },
+      parameters
+    })
+  })
+  return parseImageResponse(response, 'qwen-multimodal')
 }
 
 async function editWithChatApi(request: EditRequest): Promise<EditResponse> {
@@ -298,46 +356,39 @@ function registerIpc(): void {
   })
 
   ipcMain.handle('api:edit-image', async (_event, request: EditRequest): Promise<EditResponse> => {
-    const attempts = supportsNativeImageEdits(request.model)
-      ? [editWithImagesApi, editWithChatApi]
-      : [editWithChatApi, editWithImagesApi]
-    const protocolNames = supportsNativeImageEdits(request.model)
-      ? ['images-edits', 'chat-completions']
-      : ['chat-completions', 'images-edits']
+    const requestedProtocol = request.protocol || 'auto'
+    const protocol: UsedEditProtocol = requestedProtocol === 'auto'
+      ? inferEditProtocol(request.model)
+      : requestedProtocol
+    const handlers: Record<UsedEditProtocol, (value: EditRequest) => Promise<EditResponse>> = {
+      'openai-images-edits': editWithOpenAiImagesApi,
+      'seedream-generations': editWithSeedreamApi,
+      'qwen-multimodal': editWithQwenApi,
+      'chat-completions': editWithChatApi
+    }
 
     writeLog('info', 'image.edit.started', '开始 AI 图片编辑', {
       model: request.model,
       fileName: request.fileName,
       size: request.size || 'auto',
       promptLength: request.prompt.length,
-      preferredProtocol: protocolNames[0]
+      requestedProtocol,
+      resolvedProtocol: protocol
     })
 
-    for (let index = 0; index < attempts.length; index += 1) {
-      const protocol = protocolNames[index]
-      try {
-        const result = await attempts[index](request)
-        writeLog('info', 'image.edit.completed', 'AI 图片编辑成功', { model: request.model, protocol })
-        return result
-      } catch (error) {
-        const isLast = index === attempts.length - 1
-        writeLog(isLast ? 'error' : 'warn', 'image.edit.attempt.failed', errorMessage(error), {
-          model: request.model,
-          protocol,
-          ...errorDetails(error)
-        })
-        if (isLast || !shouldTryAlternateProtocol(error)) {
-          const requestId = error instanceof ApiRequestError && error.requestId ? `（请求 ID：${error.requestId}）` : ''
-          throw new Error(`${errorMessage(error)}${requestId}。详情已写入运行日志。`)
-        }
-        writeLog('info', 'image.edit.fallback', '请求格式不兼容，自动切换备用协议', {
-          model: request.model,
-          from: protocol,
-          to: protocolNames[index + 1]
-        })
-      }
+    try {
+      const result = await handlers[protocol](request)
+      writeLog('info', 'image.edit.completed', 'AI 图片编辑成功', { model: request.model, protocol })
+      return result
+    } catch (error) {
+      writeLog('error', 'image.edit.failed', errorMessage(error), {
+        model: request.model,
+        protocol,
+        ...errorDetails(error)
+      })
+      const requestId = error instanceof ApiRequestError && error.requestId ? `（请求 ID：${error.requestId}）` : ''
+      throw new Error(`${errorMessage(error)}${requestId}。当前协议：${protocol}，详情已写入运行日志。`)
     }
-    throw new Error('AI 图片编辑失败。详情已写入运行日志。')
   })
 }
 
