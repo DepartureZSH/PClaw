@@ -1,6 +1,6 @@
 {
   "name": "pclaw",
-  "version": "0.1.8",
+  "version": "0.1.9",
   "description": "PClaw - AI image editing desktop app for Windows",
   "main": "out/main/index.js",
   "author": "DepartureZSH",

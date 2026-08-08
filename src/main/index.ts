@@ -116,6 +116,7 @@ type TokenLog = {
   prompt_tokens?: number | string
   completion_tokens?: number | string
   group?: string
+  other?: string | Record<string, unknown>
 }
 
 const DEFAULT_QUOTA_PER_USD = 500_000
@@ -149,6 +150,17 @@ function currentWeek(now = new Date()): { start: Date; end: Date; days: CostDay[
 function numberValue(value: unknown, fallback = 0): number {
   const parsed = Number(value)
   return Number.isFinite(parsed) ? parsed : fallback
+}
+
+function logBillingDetails(log: TokenLog): Record<string, unknown> {
+  if (log.other && typeof log.other === 'object') return log.other
+  if (typeof log.other !== 'string' || !log.other.trim()) return {}
+  try {
+    const parsed = JSON.parse(log.other) as unknown
+    return parsed && typeof parsed === 'object' ? parsed as Record<string, unknown> : {}
+  } catch {
+    return {}
+  }
 }
 
 async function fetchCostSummary(): Promise<CostSummary> {
@@ -217,6 +229,9 @@ async function fetchCostSummary(): Promise<CostSummary> {
     let tokenBilledCount = 0
     let requestBilledCount = 0
     let unpricedCount = 0
+    let loggedGroupRatioCount = 0
+    const missingModels = new Set<string>()
+    const missingGroups = new Set<string>()
 
     for (const log of logs) {
       const createdAt = numberValue(log.created_at)
@@ -226,11 +241,16 @@ async function fetchCostSummary(): Promise<CostSummary> {
       callCount += 1
       const price = pricingByModel.get(log.model_name || '')
       const group = log.group || 'default'
-      const groupRatio = groupRatios.get(group)
+      const billingDetails = logBillingDetails(log)
+      const loggedGroupRatio = numberValue(billingDetails.group_ratio, NaN)
+      const groupRatio = Number.isFinite(loggedGroupRatio) ? loggedGroupRatio : groupRatios.get(group)
       if (!price || !Number.isFinite(groupRatio)) {
         unpricedCount += 1
+        if (!price) missingModels.add(log.model_name || '未知模型')
+        if (!Number.isFinite(groupRatio)) missingGroups.add(group)
         continue
       }
+      if (Number.isFinite(loggedGroupRatio)) loggedGroupRatioCount += 1
 
       const quotaType = numberValue(price.quota_type, NaN)
       let cost = NaN
@@ -275,7 +295,10 @@ async function fetchCostSummary(): Promise<CostSummary> {
       requestBilledCount,
       unpricedCount,
       exchangeRate,
-      currency: 'CNY'
+      currency: 'CNY',
+      loggedGroupRatioCount,
+      missingModels: [...missingModels].join(', ') || null,
+      missingGroups: [...missingGroups].join(', ') || null
     })
     return result
   } catch (error) {
